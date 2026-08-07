@@ -1,0 +1,259 @@
+﻿@page "/profile"
+@attribute [Authorize]
+@inject IUserService UserService
+@inject IReservationService ReservationService
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@using Microsoft.EntityFrameworkCore
+@using RslLibrary.Models
+@using RslLibrary.Constants
+
+<PageTitle>Личный кабинет</PageTitle>
+
+<h1>Личный кабинет</h1>
+
+@if (CurrentUser == null)
+{
+    <p>Загрузка...</p>
+}
+else
+{
+    <div class="card mb-4">
+        <div class="card-body">
+            <h5 class="card-title">Информация о пользователе</h5>
+            <p><strong>ФИО:</strong> @CurrentUser.FullName</p>
+            <p><strong>Email:</strong> @CurrentUser.Email</p>
+            <p><strong>Читательский билет:</strong> @CurrentUser.ReaderTicketNumber</p>
+        </div>
+    </div>
+
+    <ul class="nav nav-tabs mb-3" role="tablist">
+        <li class="nav-item" role="presentation">
+            <button class="nav-link @(ActiveTab == "reservations" ? "active" : "")"
+                    @onclick='() => ActiveTab = "reservations"'>
+                Мои бронирования
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link @(ActiveTab == "loans" ? "active" : "")"
+                    @onclick='() => ActiveTab = "loans"'>
+                Активные выдачи
+            </button>
+        </li>
+        <li class="nav-item" role="presentation">
+            <button class="nav-link @(ActiveTab == "history" ? "active" : "")"
+                    @onclick='() => ActiveTab = "history"'>
+                История чтения
+            </button>
+        </li>
+    </ul>
+
+    @if (ActiveTab == "reservations")
+    {
+        <h3>Мои бронирования</h3>
+        @if (!Reservations.Any())
+        {
+            <p>У вас нет активных бронирований.</p>
+        }
+        else
+        {
+            <div class="list-group">
+                @foreach (var res in Reservations)
+                {
+                    <div class="list-group-item">
+                        <div class="d-flex justify-content-between">
+                            <div>
+                                <h6>@res.Copy.Book.Title</h6>
+                                <p class="mb-1 text-muted small">
+                                    Дата бронирования: @res.ReservationDate.ToString("dd.MM.yyyy")
+                                    @if (res.ExpirationDate.HasValue)
+                                    {
+                                        <span> | Действует до: @res.ExpirationDate.Value.ToString("dd.MM.yyyy")</span>
+                                    }
+                                </p>
+                                <span class="badge bg-info">@GetStatusName(res.StatusId)</span>
+                            </div>
+                            @if (res.StatusId == ReservationStatuses.Waiting)
+                            {
+                                <button class="btn btn-danger btn-sm" @onclick="() => CancelReservation(res.Id)">
+                                    Отменить
+                                </button>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    }
+    else if (ActiveTab == "loans")
+    {
+        <h3>Активные выдачи</h3>
+        @if (!ActiveLoans.Any())
+        {
+            <p>У вас нет активных выдач.</p>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-hover">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Название книги</th>
+                            <th>Инвентарный номер</th>
+                            <th>Дата выдачи</th>
+                            <th>Срок возврата</th>
+                            <th>Статус</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var loan in ActiveLoans)
+                        {
+                            var daysUntilDue = (loan.DueDate.ToDateTime(TimeOnly.MinValue) - DateTime.Today).Days;
+                            var statusClass = daysUntilDue < 0 ? "table-danger" :
+                                             daysUntilDue <= 3 ? "table-warning" :
+                                             "table-success";
+                            var statusText = daysUntilDue < 0 ? $"Просрочено на {Math.Abs(daysUntilDue)} дн." :
+                                            daysUntilDue == 0 ? "Сегодня срок возврата!" :
+                                            daysUntilDue <= 3 ? $"Осталось {daysUntilDue} дн." :
+                                            $"Осталось {daysUntilDue} дн.";
+                            var statusIcon = daysUntilDue < 0 ? "bi-exclamation-triangle-fill" :
+                                            daysUntilDue <= 3 ? "bi-clock-fill" :
+                                            "bi-check-circle-fill";
+
+                            <tr class="@statusClass">
+                                <td><strong>@loan.Copy.Book.Title</strong></td>
+                                <td><code>@loan.Copy.InventoryNumber</code></td>
+                                <td>@loan.LoanDate.ToString("dd.MM.yyyy")</td>
+                                <td>@loan.DueDate.ToString("dd.MM.yyyy")</td>
+                                <td>
+                                    <span class="badge bg-@(daysUntilDue < 0 ? "danger" : daysUntilDue <= 3 ? "warning text-dark" : "success")">
+                                        <i class="bi @statusIcon"></i> @statusText
+                                    </span>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    }
+    else if (ActiveTab == "history")
+    {
+        <h3>История чтения</h3>
+        @if (!LoanHistory.Any())
+        {
+            <p>История пуста.</p>
+        }
+        else
+        {
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Книга</th>
+                        <th>Дата выдачи</th>
+                        <th>Дата возврата</th>
+                        <th>Статус</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var loan in LoanHistory)
+                    {
+                        <tr>
+                            <td>@loan.Copy.Book.Title</td>
+                            <td>@loan.LoanDate.ToString("dd.MM.yyyy")</td>
+                            <td>@(loan.ReturnDate?.ToString("dd.MM.yyyy") ?? "-")</td>
+                            <td>
+                                <span class="badge bg-@(loan.StatusId == LoanStatuses.Returned ? "success" : "secondary")">
+                                    @(loan.StatusId == LoanStatuses.Returned ? "Возвращена" : "Активна")
+                                </span>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    }
+}
+
+@if (!string.IsNullOrEmpty(Message))
+{
+    <div class="alert alert-@MessageType mt-3">@Message</div>
+}
+
+@code {
+    private ApplicationUser? CurrentUser;
+    private List<Reservation> Reservations = new();
+    private List<Loan> ActiveLoans = new();
+    private List<Loan> LoanHistory = new();
+    private string ActiveTab = "reservations";
+    private string? Message;
+    private string MessageType = "info";
+
+    protected override async Task OnInitializedAsync()
+    {
+        CurrentUser = await UserService.GetCurrentUserAsync();
+        if (CurrentUser != null)
+        {
+            await LoadData();
+        }
+    }
+
+    private async Task LoadData()
+    {
+        if (CurrentUser == null) return;
+
+        using var context = await DbFactory.CreateDbContextAsync();
+
+        Reservations = await context.Reservations
+            .Include(r => r.Copy)
+            .ThenInclude(c => c.Book)
+            .Where(r => r.UserId == CurrentUser.Id &&
+                       (r.StatusId == ReservationStatuses.Waiting || r.StatusId == ReservationStatuses.Ready))
+            .OrderByDescending(r => r.ReservationDate)
+            .ToListAsync();
+
+        ActiveLoans = await context.Loans
+            .Include(l => l.Copy)
+            .ThenInclude(c => c.Book)
+            .Where(l => l.UserId == CurrentUser.Id && l.StatusId == LoanStatuses.Active)
+            .OrderBy(l => l.DueDate)
+            .ToListAsync();
+
+        LoanHistory = await context.Loans
+            .Include(l => l.Copy)
+            .ThenInclude(c => c.Book)
+            .Where(l => l.UserId == CurrentUser.Id)
+            .OrderByDescending(l => l.LoanDate)
+            .Take(20)
+            .ToListAsync();
+    }
+
+    private async Task CancelReservation(int reservationId)
+    {
+        if (CurrentUser == null) return;
+
+        var success = await ReservationService.CancelReservationAsync(reservationId, CurrentUser.Id);
+        if (success)
+        {
+            Message = "Бронирование отменено.";
+            MessageType = "success";
+            await LoadData();
+        }
+        else
+        {
+            Message = "Не удалось отменить бронирование.";
+            MessageType = "danger";
+        }
+    }
+
+    private string GetStatusName(short statusId)
+    {
+        return statusId switch
+        {
+            ReservationStatuses.Waiting => "Ожидает",
+            ReservationStatuses.Ready => "Готово к выдаче",
+            ReservationStatuses.Completed => "Получено",
+            ReservationStatuses.Cancelled => "Отменено",
+            _ => "Неизвестно"
+        };
+    }
+}

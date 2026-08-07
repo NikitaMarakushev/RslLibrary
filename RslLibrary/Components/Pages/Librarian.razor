@@ -1,0 +1,177 @@
+﻿@page "/librarian"
+@attribute [Authorize(Roles = "Librarian,Administrator")]
+@inject ICirculationService CirculationService
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@using Microsoft.EntityFrameworkCore
+@inject ToastService ToastService
+
+<PageTitle>Рабочее место библиотекаря</PageTitle>
+
+<h1>Рабочее место библиотекаря</h1>
+
+<ul class="nav nav-tabs mb-3">
+    <li class="nav-item">
+        <button class="nav-link @(ActiveTab == "issue" ? "active" : "")" @onclick='() => ActiveTab = "issue"'>
+            Выдача книг
+        </button>
+    </li>
+    <li class="nav-item">
+        <button class="nav-link @(ActiveTab == "return" ? "active" : "")" @onclick='() => ActiveTab = "return"'>
+            Возврат книг
+        </button>
+    </li>
+</ul>
+
+@if (ActiveTab == "issue")
+{
+    <h3>Выдача книги</h3>
+    <div class="card">
+        <div class="card-body">
+            <div class="mb-3">
+                <label class="form-label">Номер читательского билета *</label>
+                <input type="text" class="form-control" @bind="ReaderTicket" placeholder="Введите или отсканируйте номер билета" />
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Инвентарный номер или штрихкод книги *</label>
+                <input type="text"
+                       class="form-control"
+                       @bind="InventoryNumber"
+                       @bind:event="oninput"
+                       @bind:after="OnInventoryNumberChanged"
+                       placeholder="Например: RBG-2026-001 (НЕ ISBN!)" />
+            </div>
+
+            @if (FoundCopy != null)
+            {
+                <div class="alert @(FoundCopy.IsAvailable ? "alert-success" : "alert-warning") mb-3">
+                    <h6 class="alert-heading">
+                        @(FoundCopy.IsAvailable ? "✅ Книга найдена и доступна" : "⚠️ Книга найдена, но недоступна")
+                    </h6>
+                    <p class="mb-1"><strong>Название:</strong> @FoundCopy.BookTitle</p>
+                    <p class="mb-1"><strong>Автор:</strong> @FoundCopy.AuthorName</p>
+                    <p class="mb-0"><strong>Статус:</strong> @FoundCopy.StatusName</p>
+                </div>
+            }
+            else if (!string.IsNullOrWhiteSpace(InventoryNumber) && InventoryNumber.Length >= 4)
+            {
+                <div class="alert alert-danger mb-3">
+                    ❌ Экземпляр с таким инвентарным номером не найден. Проверьте, не вводите ли вы ISBN.
+                </div>
+            }
+
+            <button class="btn btn-primary" @onclick="IssueBook" disabled="@(FoundCopy == null || !FoundCopy.IsAvailable || IsProcessing)">
+                @(IsProcessing ? "Обработка..." : "Выдать книгу")
+            </button>
+        </div>
+    </div>
+}
+else if (ActiveTab == "return")
+{
+    <h3>Возврат книги</h3>
+    <div class="card">
+        <div class="card-body">
+            <div class="mb-3">
+                <label class="form-label">Инвентарный номер книги</label>
+                <input type="text" class="form-control" @bind="ReturnInventoryNumber" placeholder="Введите или отсканируйте инвентарный номер" />
+            </div>
+            <button class="btn btn-success" @onclick="ReturnBook">Принять книгу</button>
+        </div>
+    </div>
+}
+
+@code {
+    private string ActiveTab = "issue";
+    private string? ReaderTicket;
+    private string? InventoryNumber;
+    private string? ReturnInventoryNumber;
+
+    private CopyInfoDto? FoundCopy;
+    private bool IsProcessing = false;
+    private bool IsReturnProcessing = false;
+
+    private async Task OnInventoryNumberChanged()
+    {
+        if (!string.IsNullOrWhiteSpace(InventoryNumber) && InventoryNumber.Length >= 4)
+        {
+            FoundCopy = await CirculationService.GetCopyInfoAsync(InventoryNumber.Trim());
+        }
+        else
+        {
+            FoundCopy = null;
+        }
+    }
+
+    private async Task IssueBook()
+    {
+        if (string.IsNullOrWhiteSpace(ReaderTicket) || string.IsNullOrWhiteSpace(InventoryNumber) || FoundCopy == null)
+        {
+            ToastService.ShowWarning("Внимание", "Заполните все поля и дождитесь поиска книги.");
+            return;
+        }
+
+        if (!FoundCopy.IsAvailable)
+        {
+            ToastService.ShowError("Ошибка", "Эта книга недоступна для выдачи.");
+            return;
+        }
+
+        IsProcessing = true;
+        try
+        {
+            using var context = await DbFactory.CreateDbContextAsync();
+            var user = await context.Users.FirstOrDefaultAsync(u => u.ReaderTicketNumber == ReaderTicket.Trim());
+
+            if (user == null)
+            {
+                ToastService.ShowError("Ошибка", "Читатель с таким номером билета не найден.");
+                return;
+            }
+
+            var result = await CirculationService.IssueBookAsync(user.Id, InventoryNumber);
+            if (result.IsSuccess)
+            {
+                ToastService.ShowSuccess("Успех", $"Книга '{FoundCopy.BookTitle}' успешно выдана читателю {user.FullName}!");
+
+                ReaderTicket = "";
+                InventoryNumber = "";
+                FoundCopy = null;
+            }
+            else
+            {
+                ToastService.ShowError("Ошибка выдачи", result.Message);
+            }
+        }
+        finally
+        {
+            IsProcessing = false;
+        }
+    }
+
+    private async Task ReturnBook()
+    {
+        if (string.IsNullOrWhiteSpace(ReturnInventoryNumber))
+        {
+            ToastService.ShowWarning("Внимание", "Введите инвентарный номер.");
+            return;
+        }
+
+        IsReturnProcessing = true;
+        try
+        {
+            var result = await CirculationService.ReturnBookAsync(ReturnInventoryNumber.Trim());
+            if (result.IsSuccess)
+            {
+                ToastService.ShowSuccess("Успех", "Книга успешно принята!");
+                ReturnInventoryNumber = "";
+            }
+            else
+            {
+                ToastService.ShowError("Ошибка возврата", result.Message);
+            }
+        }
+        finally
+        {
+            IsReturnProcessing = false;
+        }
+    }
+}

@@ -1,0 +1,35 @@
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<div class="chart-container" style="position: relative; height:300px;">
+    <canvas id="@Id"></canvas>
+</div>
+
+@code {
+    [Parameter] public string Id { get; set; } = $"chart-{Guid.NewGuid():N}";
+    [Parameter] public string Type { get; set; } = "bar";
+    [Parameter] public string[] Labels { get; set; } = Array.Empty<string>();
+    [Parameter] public int[] Data { get; set; } = Array.Empty<int>();
+    [Parameter] public string[] Colors { get; set; } = Array.Empty<string>();
+    [Parameter] public string Title { get; set; } = "";
+
+    private bool _chartCreated = false;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Labels.Length > 0 && Data.Length > 0 && !_chartCreated)
+        {
+            _chartCreated = true;
+            await JS.InvokeVoidAsync("createChart", Id, Type, Labels, Data, Colors, Title);
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("destroyChart", Id);
+        }
+        catch { }
+    }
+}

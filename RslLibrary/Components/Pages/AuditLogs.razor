@@ -1,0 +1,221 @@
+﻿@page "/admin/audit-logs"
+@attribute [Authorize(Roles = "Administrator")]
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@using Microsoft.EntityFrameworkCore
+@using RslLibrary.Models
+
+<PageTitle>Журнал аудита</PageTitle>
+
+<h1>Журнал аудита</h1>
+<p class="text-muted">История действий пользователей в системе</p>
+
+<div class="row mb-3">
+    <div class="col-md-4">
+        <select class="form-select" @bind="FilterAction">
+            <option value="">Все действия</option>
+            <option value="ISSUE">Выдача книги</option>
+            <option value="RETURN">Возврат книги</option>
+            <option value="RESERVE">Бронирование</option>
+            <option value="CANCEL_RESERVATION">Отмена бронирования</option>
+        </select>
+    </div>
+    <div class="col-md-4">
+        <input type="text" class="form-control" placeholder="Поиск по пользователю или сущности..." @bind="SearchTerm" />
+    </div>
+    <div class="col-md-4">
+        <button class="btn btn-primary w-100" @onclick="LoadLogs">Применить фильтр</button>
+    </div>
+</div>
+
+@if (Logs == null)
+{
+    <p><em>Загрузка...</em></p>
+}
+else if (!Logs.Any())
+{
+    <div class="alert alert-info">Записи в журнале отсутствуют.</div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-striped table-hover">
+            <thead class="table-dark">
+                <tr>
+                    <th>Дата/Время</th>
+                    <th>Пользователь</th>
+                    <th>Действие</th>
+                    <th>Сущность</th>
+                    <th>ID сущности</th>
+                    <th>IP-адрес</th>
+                    <th>Детали</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var log in Logs)
+                {
+                    <tr>
+                        <td>@log.CreatedAt.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss")</td>
+                        <td>@(log.User?.FullName ?? "Система")</td>
+                        <td>
+                            <span class="badge bg-@GetActionColor(log.Action)">@GetActionName(log.Action)</span>
+                        </td>
+                        <td>@log.EntityName</td>
+                        <td>@log.EntityId</td>
+                        <td><code>@log.IpAddress</code></td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-info" @onclick="() => ShowDetails(log)">
+                                Подробнее
+                            </button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    @if (TotalPages > 1)
+    {
+        <nav>
+            <ul class="pagination justify-content-center">
+                @for (int i = 1; i <= TotalPages; i++)
+                {
+                    var pageIndex = i;
+                    <li class="page-item @(pageIndex == CurrentPage ? "active" : "")">
+                        <button class="page-link" @onclick="() => GoToPage(pageIndex)">@pageIndex</button>
+                    </li>
+                }
+            </ul>
+        </nav>
+    }
+}
+
+@if (SelectedLog != null)
+{
+    <div class="modal fade show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Детали операции</h5>
+                    <button type="button" class="btn-close" @onclick="CloseDetails"></button>
+                </div>
+                <div class="modal-body">
+                    <p><strong>Действие:</strong> @GetActionName(SelectedLog.Action)</p>
+                    <p><strong>Сущность:</strong> @SelectedLog.EntityName (ID: @SelectedLog.EntityId)</p>
+                    <p><strong>Пользователь:</strong> @(SelectedLog.User?.FullName ?? "Система")</p>
+                    <p><strong>IP-адрес:</strong> @SelectedLog.IpAddress</p>
+                    <p><strong>Время:</strong> @SelectedLog.CreatedAt.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss")</p>
+
+                    @if (!string.IsNullOrEmpty(SelectedLog.OldValues))
+                    {
+                        <div class="mb-3">
+                            <strong>Старые значения:</strong>
+                            <pre class="bg-light p-2 rounded">@SelectedLog.OldValues</pre>
+                        </div>
+                    }
+
+                    @if (!string.IsNullOrEmpty(SelectedLog.NewValues))
+                    {
+                        <div class="mb-3">
+                            <strong>Новые значения:</strong>
+                            <pre class="bg-light p-2 rounded">@SelectedLog.NewValues</pre>
+                        </div>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseDetails">Закрыть</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<AuditLog>? Logs;
+    private AuditLog? SelectedLog;
+    private string? FilterAction;
+    private string? SearchTerm;
+    private int CurrentPage = 1;
+    private int PageSize = 20;
+    private int TotalPages = 1;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadLogs();
+    }
+
+    private async Task LoadLogs()
+    {
+        CurrentPage = 1;
+        await LoadLogsPaged();
+    }
+
+    private async Task LoadLogsPaged()
+    {
+        using var context = await DbFactory.CreateDbContextAsync();
+
+        IQueryable<AuditLog> query = context.AuditLogs
+            .Include(l => l.User)
+            .OrderByDescending(l => l.CreatedAt);
+
+        if (!string.IsNullOrEmpty(FilterAction))
+            query = query.Where(l => l.Action == FilterAction);
+
+        if (!string.IsNullOrWhiteSpace(SearchTerm))
+        {
+            var search = SearchTerm.ToLower();
+            query = query.Where(l =>
+                (l.User != null && l.User.FullName.ToLower().Contains(search)) ||
+                l.EntityName.ToLower().Contains(search) ||
+                (l.IpAddress != null && l.IpAddress.Contains(search))
+            );
+        }
+
+        var totalCount = await query.CountAsync();
+        TotalPages = (int)Math.Ceiling(totalCount / (double)PageSize);
+
+        Logs = await query
+            .Skip((CurrentPage - 1) * PageSize)
+            .Take(PageSize)
+            .ToListAsync();
+    }
+
+    private async Task GoToPage(int page)
+    {
+        CurrentPage = page;
+        await LoadLogsPaged();
+    }
+
+    private void ShowDetails(AuditLog log)
+    {
+        SelectedLog = log;
+    }
+
+    private void CloseDetails()
+    {
+        SelectedLog = null;
+    }
+
+    private string GetActionName(string action)
+    {
+        return action switch
+        {
+            "ISSUE" => "Выдача",
+            "RETURN" => "Возврат",
+            "RESERVE" => "Бронирование",
+            "CANCEL_RESERVATION" => "Отмена брони",
+            _ => action
+        };
+    }
+
+    private string GetActionColor(string action)
+    {
+        return action switch
+        {
+            "ISSUE" => "success",
+            "RETURN" => "info",
+            "RESERVE" => "warning",
+            "CANCEL_RESERVATION" => "secondary",
+            _ => "primary"
+        };
+    }
+}

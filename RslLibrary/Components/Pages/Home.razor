@@ -1,0 +1,66 @@
+﻿@page "/"
+@using RslLibrary.Components.Shared
+@inject IBookService BookService
+
+<PageTitle>Библиотека РГБ</PageTitle>
+
+<h1>Добро пожаловать в электронную библиотеку РГБ!</h1>
+
+<p class="lead">
+    Автоматизированная система учета библиотечного фонда, поиска литературы, выдачи и возврата книг.
+</p>
+
+<hr />
+
+<h3>Последние поступления</h3>
+
+@if (Books == null)
+{
+    <div class="row">
+        @for (int i = 0; i < 6; i++)
+        {
+            <div class="col-md-4 mb-3">
+                <SkeletonCard />
+            </div>
+        }
+    </div>
+}
+else if (!Books.Any())
+{
+    <p>Книги пока не добавлены.</p>
+}
+else
+{
+    <div class="row">
+        @foreach (var book in Books.Take(6))
+        {
+            <div class="col-md-4 mb-3">
+                <div class="card h-100">
+                    <div class="card-body">
+                        <h5 class="card-title">@book.Title</h5>
+                        <p class="card-text text-muted small">Автор: @book.AuthorFullName</p>
+                        <p class="card-text text-muted small">Категория: @book.CategoryName</p>
+                        <span class="badge bg-@(book.AvailableCopiesCount > 0 ? "success" : "danger")">
+                            @(book.AvailableCopiesCount > 0 ? $"Доступно: {book.AvailableCopiesCount}" : "Нет в наличии")
+                        </span>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+
+    <div class="text-center mt-3">
+        <a href="catalog" class="btn btn-primary btn-lg">Перейти в полный каталог</a>
+    </div>
+}
+
+@code {
+    private List<BookDto>? Books;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Task.Delay(1500);
+
+        Books = (await BookService.GetAllBooksAsync()).ToList();
+    }
+}

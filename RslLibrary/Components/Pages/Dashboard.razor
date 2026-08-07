@@ -1,0 +1,148 @@
+@page "/dashboard"
+@attribute [Authorize(Roles = "Administrator,Librarian")]
+@inject IStatisticsService StatisticsService
+@using RslLibrary.Components.Shared
+
+<PageTitle>Панель управления</PageTitle>
+
+<h1>Панель управления</h1>
+
+@if (isLoading)
+{
+    <div class="text-center p-5">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Загрузка...</span>
+        </div>
+    </div>
+}
+else
+{
+    <div class="row mb-4">
+        <div class="col-md-4">
+            <div class="card bg-primary text-white">
+                <div class="card-body">
+                    <h5 class="card-title">Всего книг</h5>
+                    <h2 class="card-text">@totalBooks</h2>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card bg-success text-white">
+                <div class="card-body">
+                    <h5 class="card-title">Активных выдач</h5>
+                    <h2 class="card-text">@activeLoans</h2>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card bg-danger text-white">
+                <div class="card-body">
+                    <h5 class="card-title">Просрочено</h5>
+                    <h2 class="card-text">@overdueLoans</h2>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-6">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5>Книги по категориям</h5>
+                </div>
+                <div class="card-body">
+                    <ChartComponent Type="pie"
+                                    Labels="@booksByCategory.Keys.ToArray()"
+                                    Data="@booksByCategory.Values.ToArray()"
+                                    Colors="@pieColors"
+                                    Title="Количество книг" />
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5>Выдачи за последние 6 месяцев</h5>
+                </div>
+                <div class="card-body">
+                    <ChartComponent Type="bar"
+                                    Labels="@loansByMonth.Keys.ToArray()"
+                                    Data="@loansByMonth.Values.ToArray()"
+                                    Title="Количество выдач" />
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-12">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5>Популярные книги (топ-5)</h5>
+                </div>
+                <div class="card-body">
+                    <ChartComponent Type="bar"
+                                    Labels="@popularBooks.Keys.ToArray()"
+                                    Data="@popularBooks.Values.ToArray()"
+                                    Colors="@barColors"
+                                    Title="Количество выдач" />
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private bool isLoading = true;
+    private int totalBooks;
+    private int activeLoans;
+    private int overdueLoans;
+    private Dictionary<string, int> booksByCategory = new();
+    private Dictionary<string, int> loansByMonth = new();
+    private Dictionary<string, int> popularBooks = new();
+
+    private string[] pieColors = new[]
+    {
+        "rgba(255, 99, 132, 0.5)",
+        "rgba(54, 162, 235, 0.5)",
+        "rgba(255, 206, 86, 0.5)",
+        "rgba(75, 192, 192, 0.5)",
+        "rgba(153, 102, 255, 0.5)",
+        "rgba(255, 159, 64, 0.5)"
+    };
+
+    private string[] barColors = new[]
+    {
+        "rgba(75, 192, 192, 0.5)",
+        "rgba(54, 162, 235, 0.5)",
+        "rgba(255, 206, 86, 0.5)",
+        "rgba(255, 99, 132, 0.5)",
+        "rgba(153, 102, 255, 0.5)"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadStatistics();
+    }
+
+    private async Task LoadStatistics()
+    {
+        try
+        {
+            totalBooks = await StatisticsService.GetTotalBooksCountAsync();
+            activeLoans = await StatisticsService.GetActiveLoansCountAsync();
+            overdueLoans = await StatisticsService.GetOverdueLoansCountAsync();
+            booksByCategory = await StatisticsService.GetBooksByCategoryAsync();
+            loansByMonth = await StatisticsService.GetLoansByMonthAsync();
+            popularBooks = await StatisticsService.GetPopularBooksAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ошибка загрузки статистики: {ex.Message}");
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+}

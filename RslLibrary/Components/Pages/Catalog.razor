@@ -1,0 +1,238 @@
+﻿@page "/catalog"
+@using RslLibrary.Components.Shared
+@using RslLibrary.Models
+@inject IBookSpecificationService BookSpecService
+@inject IBookService BookService
+@inject IReservationService ReservationService
+@inject IUserService UserService
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthStateProvider
+@inject ToastService ToastService
+@implements IDisposable
+
+<PageTitle>Каталог книг</PageTitle>
+
+<h1>Каталог книг</h1>
+
+<div class="row mb-4">
+    <div class="col-md-6">
+        <input type="text" class="form-control" placeholder="Поиск по названию или ISBN..."
+               value="@SearchTerm"
+               @oninput="OnSearchInput" />
+    </div>
+    <div class="col-md-3">
+        <select class="form-select" value="@SelectedCategoryId" @onchange="OnCategoryChanged">
+            <option value="">Все категории</option>
+            @foreach (var cat in Categories)
+            {
+                <option value="@cat.Id">@cat.Name</option>
+            }
+        </select>
+    </div>
+    <div class="col-md-3">
+        <button class="btn btn-primary w-100" @onclick="SearchBooks">Найти</button>
+    </div>
+</div>
+
+@* БЛОК ОТОБРАЖЕНИЯ ДАННЫХ *@
+@if (Books == null)
+{
+    @* Показываем скелетоны, пока данные грузятся из БД *@
+    <div class="row">
+        @for (int i = 0; i < 6; i++)
+        {
+            <div class="col-md-4 mb-4">
+                <SkeletonCard />
+            </div>
+        }
+    </div>
+}
+else if (Books.Items.Count == 0)
+{
+    <div class="alert alert-info">Книги не найдены.</div>
+}
+else
+{
+    <div class="row">
+        @foreach (var book in Books.Items)
+        {
+            <div class="col-md-4 mb-4">
+                <div class="card h-100 shadow-sm">
+                    <div class="card-body">
+                        <span class="badge bg-secondary mb-2">@book.CategoryName</span>
+                        <h5 class="card-title">@book.Title</h5>
+                        <p class="card-text text-muted small">Автор: @book.AuthorFullName</p>
+                        @if (book.Isbn != null)
+                        {
+                            <p class="card-text text-muted small">ISBN: @book.Isbn</p>
+                        }
+                        @if (book.Year.HasValue)
+                        {
+                            <p class="card-text text-muted small">Год: @book.Year</p>
+                        }
+
+                        <div class="d-flex justify-content-between align-items-center mt-3">
+                            <span class="small fw-semibold @(book.AvailableCopiesCount > 0 ? "text-success" : "text-danger")">
+                                @(book.AvailableCopiesCount > 0 ? $"Доступно: {book.AvailableCopiesCount} шт." : "Нет в наличии")
+                            </span>
+
+                            @if (book.AvailableCopiesCount > 0)
+                            {
+                                <button class="btn btn-primary btn-sm" @onclick="() => ReserveBook(book.Id)">
+                                    Забронировать
+                                </button>
+                            }
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+
+    @* ПАГИНАЦИЯ (используем свойства из PagedList) *@
+    @if (Books.TotalPages > 1)
+    {
+        <nav>
+            <ul class="pagination justify-content-center">
+                @if (Books.HasPreviousPage)
+                {
+                    <li class="page-item">
+                        <button class="page-link" @onclick="() => GoToPage(CurrentPage - 1)">« Назад</button>
+                    </li>
+                }
+
+                @for (int i = 1; i <= Books.TotalPages; i++)
+                {
+                    var pageIndex = i;
+                    <li class="page-item @(pageIndex == CurrentPage ? "active" : "")">
+                        <button class="page-link" @onclick="() => GoToPage(pageIndex)">@pageIndex</button>
+                    </li>
+                }
+
+                @if (Books.HasNextPage)
+                {
+                    <li class="page-item">
+                        <button class="page-link" @onclick="() => GoToPage(CurrentPage + 1)">Вперёд »</button>
+                    </li>
+                }
+            </ul>
+        </nav>
+    }
+}
+@code {
+    private PagedList<BookDto>? Books;
+    private List<Category> Categories = new();
+    private string? SearchTerm;
+    private int? SelectedCategoryId;
+    private int CurrentPage = 1;
+    private int PageSize = 9;
+
+    // ✅ DEBOUNCE: таймер для задержки поиска
+    private System.Threading.Timer? _debounceTimer;
+    private const int DebounceDelayMs = 400;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Categories = (await BookService.GetCategoriesAsync()).ToList();
+
+        await Task.Delay(1500);
+
+        await LoadBooks();
+    }
+
+    private void OnSearchInput(ChangeEventArgs e)
+    {
+        SearchTerm = e.Value?.ToString();
+
+        _debounceTimer?.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+        _debounceTimer?.Dispose();
+
+        _debounceTimer = new System.Threading.Timer(async _ =>
+        {
+            await InvokeAsync(async () =>
+            {
+                CurrentPage = 1;
+                await LoadBooks();
+                StateHasChanged();
+            });
+        }, null, DebounceDelayMs, System.Threading.Timeout.Infinite);
+    }
+
+    private void OnCategoryChanged(ChangeEventArgs e)
+    {
+        var value = e.Value?.ToString();
+        SelectedCategoryId = string.IsNullOrEmpty(value) ? null : int.Parse(value);
+
+        _debounceTimer?.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+        _debounceTimer?.Dispose();
+
+        _debounceTimer = new System.Threading.Timer(async _ =>
+        {
+            await InvokeAsync(async () =>
+            {
+                CurrentPage = 1;
+                await LoadBooks();
+                StateHasChanged();
+            });
+        }, null, DebounceDelayMs, System.Threading.Timeout.Infinite);
+    }
+
+    private async Task LoadBooks()
+    {
+        Books = null;
+        StateHasChanged();
+
+        Books = await BookSpecService.GetFilteredBooksAsync(
+            SearchTerm,
+            SelectedCategoryId,
+            null,
+            CurrentPage,
+            PageSize);
+    }
+
+    private async Task SearchBooks()
+    {
+        _debounceTimer?.Dispose();
+        CurrentPage = 1;
+        await LoadBooks();
+    }
+
+    private async Task GoToPage(int page)
+    {
+        CurrentPage = page;
+        await LoadBooks();
+    }
+
+    private async Task ReserveBook(int bookId)
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        if (!authState.User.Identity?.IsAuthenticated ?? true)
+        {
+            ToastService.ShowWarning("Внимание", "Для бронирования необходимо войти в систему.");
+            return;
+        }
+
+        var user = await UserService.GetCurrentUserAsync();
+        if (user == null)
+        {
+            ToastService.ShowError("Ошибка", "Не удалось определить пользователя.");
+            return;
+        }
+
+        var success = await ReservationService.CreateReservationAsync(user.Id, bookId);
+        if (success)
+        {
+            ToastService.ShowSuccess("Успех", "Книга успешно забронирована!");
+            await LoadBooks();
+        }
+        else
+        {
+            ToastService.ShowError("Ошибка", "Не удалось забронировать книгу. Возможно, она уже недоступна.");
+        }
+    }
+
+    public void Dispose()
+    {
+        _debounceTimer?.Dispose();
+    }
+}
